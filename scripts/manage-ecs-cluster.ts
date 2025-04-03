@@ -7,32 +7,31 @@
  * It will also allow the user to set the desired count for a service.
  */
 
-import { Deferred, Effect, Layer } from "effect";
-import { Command, Prompt } from "@effect/cli";
-import { NodeContext, NodeRuntime } from "@effect/platform-node";
-import { spawn } from "child_process";
-import { Schema } from "effect";
-import { QuitException } from "@effect/platform/Terminal";
+import { Command, Prompt } from "@effect/cli"
+import { NodeContext, NodeRuntime } from "@effect/platform-node"
+import { QuitException } from "@effect/platform/Terminal"
+import { spawn } from "child_process"
+import { Deferred, Effect, Layer, Schema } from "effect"
 
 const StsGetCallerIdentity = Schema.parseJson(
   Schema.Struct({
     UserId: Schema.String,
     Account: Schema.String,
-    Arn: Schema.String,
+    Arn: Schema.String
   })
-);
+)
 
 const EcsListClusters = Schema.parseJson(
   Schema.Struct({
-    clusterArns: Schema.Array(Schema.String),
+    clusterArns: Schema.Array(Schema.String)
   })
-);
+)
 
 const EcsListServices = Schema.parseJson(
   Schema.Struct({
-    serviceArns: Schema.Array(Schema.String),
+    serviceArns: Schema.Array(Schema.String)
   })
-);
+)
 
 const EcsDescribeServices = Schema.parseJson(
   Schema.Struct({
@@ -40,84 +39,82 @@ const EcsDescribeServices = Schema.parseJson(
       Schema.Struct({
         serviceName: Schema.String,
         desiredCount: Schema.Number,
-        runningCount: Schema.Number,
+        runningCount: Schema.Number
       })
-    ),
+    )
   })
-);
+)
 
 class ClusterCommand extends Effect.Service<ClusterCommand>()(
   "app/ClusterCommand",
   {
-    effect: Effect.gen(function* () {
+    effect: Effect.gen(function*() {
       return {
-        execute: Effect.fnUntraced(function* (args: string[]) {
-          const deferred = yield* Deferred.make<string>();
+        execute: Effect.fnUntraced(function*(args: Array<string>) {
+          const deferred = yield* Deferred.make<string>()
 
           const childProcess = spawn("aws", [...args, "--output", "json"], {
-            cwd: process.cwd(),
-          });
-          let data = "";
+            cwd: process.cwd()
+          })
+          let data = ""
           childProcess.stdout?.on("data", (chunk) => {
-            data += chunk.toString();
-          });
+            data += chunk.toString()
+          })
           childProcess.on("close", () => {
             Effect.runFork(
               Deferred.completeWith(deferred, Effect.succeed(data))
-            );
-          });
+            )
+          })
 
-          return deferred;
-        }),
-      };
-    }),
+          return deferred
+        })
+      }
+    })
   }
 ) {}
 
 const entrypoint = Command.make("init").pipe(
   Command.withDescription("Manage the cluster"),
   Command.withHandler(() =>
-    Effect.gen(function* () {
-      const { execute } = yield* ClusterCommand;
+    Effect.gen(function*() {
+      const { execute } = yield* ClusterCommand
       const getCallerIdDeferred = yield* execute([
         "sts",
-        "get-caller-identity",
-      ]);
+        "get-caller-identity"
+      ])
       yield* Deferred.await(getCallerIdDeferred).pipe(
         Effect.flatMap(Schema.decodeUnknown(StsGetCallerIdentity)),
-        Effect.catchAll(() =>
-          Effect.fail("Please configure your AWS credentials")
-        )
-      );
+        Effect.catchAll(() => Effect.fail("Please configure your AWS credentials"))
+      )
 
-      const listClustersDeferred = yield* execute(["ecs", "list-clusters"]);
+      const listClustersDeferred = yield* execute(["ecs", "list-clusters"])
       const listClusters = yield* Deferred.await(listClustersDeferred).pipe(
         Effect.flatMap(Schema.decodeUnknown(EcsListClusters)),
         Effect.catchAll(() => Effect.fail("Failed to list clusters"))
-      );
+      )
 
       const clusterArn = yield* Prompt.select({
         message: "Select a cluster",
         choices: listClusters.clusterArns.map((cluster) => ({
           title: cluster.split("/").pop()!,
-          value: cluster,
-        })),
-      });
+          value: cluster
+        }))
+      })
 
       const listServicesDeferred = yield* execute([
         "ecs",
         "list-services",
         "--cluster",
-        clusterArn,
-      ]);
+        clusterArn
+      ])
       const listServices = yield* Deferred.await(listServicesDeferred).pipe(
         Effect.flatMap(Schema.decodeUnknown(EcsListServices)),
         Effect.catchAll(() => Effect.fail("Failed to list services"))
-      );
+      )
 
       if (listServices.serviceArns.length === 0) {
-        yield* Effect.log("No services found in the cluster");
-        return;
+        yield* Effect.log("No services found in the cluster")
+        return
       }
 
       // Get detailed service information
@@ -127,39 +124,39 @@ const entrypoint = Command.make("init").pipe(
         "--cluster",
         clusterArn,
         "--services",
-        ...listServices.serviceArns,
-      ]);
+        ...listServices.serviceArns
+      ])
       const servicesInfo = yield* Deferred.await(describeServicesDeferred).pipe(
         Effect.flatMap(Schema.decodeUnknown(EcsDescribeServices)),
         Effect.catchAll((e) => Effect.fail(e.message))
-      );
+      )
 
       yield* Effect.log("\nCurrent service status:").pipe(
         Effect.annotateLogs({
-          servicesInfo,
+          servicesInfo
         })
-      );
+      )
 
       const scaleDownAll = [
         {
           title: "Scale all services to 0",
-          value: 0,
+          value: 0
         },
         {
           title: "Scale all services to 1",
-          value: 1,
-        },
-      ];
+          value: 1
+        }
+      ]
       const serviceChoices = listServices.serviceArns.map((service) => ({
         title: "Scale " + service.split("/").pop()!,
-        value: service,
-      }));
+        value: service
+      }))
       const serviceDecision = yield* Prompt.select<string | number>({
         message: "What do you want to do?",
-        choices: [...serviceChoices, ...scaleDownAll],
-      });
+        choices: [...serviceChoices, ...scaleDownAll]
+      })
       if (typeof serviceDecision === "number") {
-        yield* Effect.log(`Scaling to ${serviceDecision} all services`);
+        yield* Effect.log(`Scaling to ${serviceDecision} all services`)
         for (const service of listServices.serviceArns) {
           yield* execute([
             "ecs",
@@ -169,17 +166,17 @@ const entrypoint = Command.make("init").pipe(
             "--service",
             service,
             "--desired-count",
-            serviceDecision.toString(),
-          ]).pipe(Effect.as(void 0));
+            serviceDecision.toString()
+          ]).pipe(Effect.as(void 0))
         }
-        return;
+        return
       }
 
       const desiredCount = yield* Prompt.integer({
         message: "Set the desired count for the service",
         min: 0,
-        max: 100,
-      });
+        max: 100
+      })
       const updateServiceDeferred = yield* execute([
         "ecs",
         "update-service",
@@ -188,31 +185,31 @@ const entrypoint = Command.make("init").pipe(
         "--service",
         serviceDecision,
         "--desired-count",
-        desiredCount.toString(),
-      ]);
-      yield* Deferred.await(updateServiceDeferred);
-      yield* Effect.log("Done");
+        desiredCount.toString()
+      ])
+      yield* Deferred.await(updateServiceDeferred)
+      yield* Effect.log("Done")
     }).pipe(
       Effect.catchAll((e) => {
         if (e instanceof QuitException) {
-          return Effect.fail(e.message);
+          return Effect.fail(e.message)
         }
-        console.error(e);
-        return Effect.fail(e);
+        console.error(e)
+        return Effect.fail(e)
       })
     )
   )
-);
+)
 
 export const run = Command.run(entrypoint, {
   name: "manage-cluster",
-  version: "0.0.1",
-});
+  version: "0.0.1"
+})
 
 run(process.argv).pipe(
   Effect.provide(NodeContext.layer.pipe(Layer.merge(ClusterCommand.Default))),
   NodeRuntime.runMain({
     disableErrorReporting: true,
-    disablePrettyLogger: true,
+    disablePrettyLogger: true
   })
-);
+)

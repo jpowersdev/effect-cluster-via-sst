@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": ["scripts", "cmd", "sst-env.d.ts", "lambda.ts"],
+  "references": [{ "path": "./tsconfig.src.json" }],
+  "compilerOptions": {
+    "types": ["node"],
+    "outDir": "dist",
+    "tsBuildInfoFile": ".tsbuildinfo/scripts.tsbuildinfo",
+    "rootDir": "."
+  }
+}

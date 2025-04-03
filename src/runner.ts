@@ -1,12 +1,10 @@
-import { MathematicianLive } from "@/domain/mathematician";
-import { SqlLayer } from "@/cluster/sql";
-import { RunnerAddress } from "@effect/cluster";
-import { NodeClusterRunnerSocket, NodeRuntime } from "@effect/platform-node";
-import { Context, Effect, Layer, Option, Logger } from "effect";
-import { HealthServerLive } from "@/cluster/health-server";
-import { IpAddress, ipLayer, Port } from "@/cluster/container-metadata";
-import { portLayer } from "@/cluster/container-metadata";
-import { ProcessCrasher } from "@/domain/process-crasher";
+import { RunnerAddress } from "@effect/cluster"
+import { NodeClusterRunnerSocket, NodeRuntime } from "@effect/platform-node"
+import { IpAddress, ipLayer, Port, portLayer } from "app/cluster/container-metadata"
+import { HealthServerLive } from "app/cluster/health-server"
+import { SqlLayer } from "app/cluster/sql"
+import { Context, Effect, Layer, Logger, Option } from "effect"
+import { LibrarianLive } from "./domain/librarian"
 
 const RunnerLive = Layer.mergeAll(ipLayer, portLayer).pipe(
   Layer.flatMap((ctx) =>
@@ -18,28 +16,28 @@ const RunnerLive = Layer.mergeAll(ipLayer, portLayer).pipe(
             Context.get(ctx, IpAddress),
             Context.get(ctx, Port)
           )
-        ),
-      },
+        )
+      }
     })
   )
-);
+)
 
-const Entities = Layer.mergeAll(MathematicianLive, ProcessCrasher).pipe(
+const Entities = Layer.mergeAll(LibrarianLive).pipe(
   Layer.provide(ipLayer)
-);
+)
 
 const program = Entities.pipe(
   Layer.provide(RunnerLive),
   Layer.provide(HealthServerLive),
   Layer.provide(SqlLayer),
   Layer.launch
-);
+)
 
-const inEcs = process.env.ECS_CONTAINER_METADATA_URI_V4 !== undefined;
+const inEcs = process.env.ECS_CONTAINER_METADATA_URI_V4 !== undefined
 const programWithAdjustedLogger = inEcs
   ? program.pipe(Effect.provide(Logger.json))
-  : program;
+  : program
 
 programWithAdjustedLogger.pipe(
   NodeRuntime.runMain({ disablePrettyLogger: inEcs })
-);
+)

@@ -8,65 +8,65 @@
  * It will then wait for the user to press [c] to crash the runner.
  */
 
-import { Effect, Console, Match, Layer } from "effect";
-import { NodeRuntime, NodeTerminal } from "@effect/platform-node";
-import { spawn } from "child_process";
-import { Terminal } from "@effect/platform";
-import { identity } from "effect/Function";
+import { Terminal } from "@effect/platform"
+import { NodeRuntime, NodeTerminal } from "@effect/platform-node"
+import { spawn } from "child_process"
+import { Console, Effect, Layer, Match } from "effect"
+import { identity } from "effect/Function"
 
 class DevCommand extends Effect.Service<DevCommand>()("app/DevCommand", {
-  effect: Effect.gen(function* () {
+  effect: Effect.gen(function*() {
     return {
-      execute: (args: string[]) => {
+      execute: (args: Array<string>) => {
         const childProcess = spawn("npx", args, {
           cwd: process.cwd(),
           stdio: "inherit",
-          detached: true,
-        });
+          detached: true
+        })
 
         return {
           terminate: () => {
-            childProcess.kill("SIGINT");
-          },
-        };
-      },
-    };
-  }),
+            childProcess.kill("SIGINT")
+          }
+        }
+      }
+    }
+  })
 }) {}
 
-const program = Effect.gen(function* () {
-  const terminal = yield* Terminal.Terminal;
-  const { execute } = yield* DevCommand;
+const program = Effect.gen(function*() {
+  const terminal = yield* Terminal.Terminal
+  const { execute } = yield* DevCommand
 
-  let shardManagerProcess: { terminate: () => void } | undefined;
-  let runnerProcess: { terminate: () => void } | undefined;
+  // eslint-disable-next-line prefer-const
+  let shardManagerProcess: { terminate: () => void } | undefined
+  let runnerProcess: { terminate: () => void } | undefined
 
   yield* Effect.addFinalizer(() =>
     Console.log("Application is about to exit!").pipe(
       Effect.tap(() => {
-        runnerProcess?.terminate();
-        shardManagerProcess?.terminate();
+        runnerProcess?.terminate()
+        shardManagerProcess?.terminate()
       })
     )
-  );
+  )
 
-  yield* Console.log("Press [x] or [q] to terminate");
-  yield* Console.log("Press [r] to restart the runner");
-  yield* Console.log("Press [c] to crash the runner");
-  shardManagerProcess = execute(["tsx", "src/shard-manager.ts"]);
+  yield* Console.log("Press [x] or [q] to terminate")
+  yield* Console.log("Press [r] to restart the runner")
+  yield* Console.log("Press [c] to crash the runner")
+  shardManagerProcess = execute(["tsx", "src/shard-manager.ts"])
 
   // This delay allows the shard manager to start
   // before the runner is started.
-  yield* Effect.sleep("1 second");
+  yield* Effect.sleep("1 second")
   const executeRunner = Effect.suspend(() =>
     Effect.sync(
       () => (
-        runnerProcess?.terminate(),
-        (runnerProcess = execute(["tsx", "src/runner.ts"]))
+        runnerProcess?.terminate(), (runnerProcess = execute(["tsx", "src/runner.ts"]))
       )
     )
-  );
-  yield* executeRunner;
+  )
+  yield* executeRunner
 
   // On press of x or q, terminate all processes
   // On press of r, restart the runner
@@ -75,9 +75,7 @@ const program = Effect.gen(function* () {
     Effect.map((input) => input.key.name),
     Effect.flatMap((key) =>
       Match.value(key).pipe(
-        Match.when("r", () =>
-          executeRunner.pipe(Effect.zipRight(Effect.succeed(false)))
-        ),
+        Match.when("r", () => executeRunner.pipe(Effect.zipRight(Effect.succeed(false)))),
         Match.when("x", () => Effect.succeed(true)),
         Match.when("q", () => Effect.succeed(true)),
         Match.when("c", () => Effect.sync(() => runnerProcess?.terminate()).pipe(Effect.as(false))),
@@ -85,18 +83,18 @@ const program = Effect.gen(function* () {
       )
     ),
     Effect.repeat({
-      until: identity<boolean>,
+      until: identity<boolean>
     })
-  );
+  )
 
-  yield* Console.log("Terminating services...");
-  runnerProcess?.terminate();
-  yield* Effect.sleep("3 seconds");
-  shardManagerProcess.terminate();
-});
+  yield* Console.log("Terminating services...")
+  runnerProcess?.terminate()
+  yield* Effect.sleep("3 seconds")
+  shardManagerProcess.terminate()
+})
 
 program.pipe(
   Effect.provide(NodeTerminal.layer.pipe(Layer.merge(DevCommand.Default))),
   Effect.scoped,
   NodeRuntime.runMain
-);
+)

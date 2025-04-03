@@ -8,5 +8,5 @@ export const SqlLayer = PgClient.layerConfig({
   password: Config.redacted("DB_PASSWORD"),
   host: Config.string("DB_HOST"),
   port: Config.number("DB_PORT"),
-  onnotice: Config.succeed(constVoid),
+  onnotice: Config.succeed(constVoid)
 })
