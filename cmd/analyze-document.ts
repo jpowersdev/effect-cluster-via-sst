@@ -1,102 +1,91 @@
 #!/usr/bin/env tsx
 
-import { AiError } from "@effect/ai"
-import { NodeClusterRunnerSocket } from "@effect/platform-node"
-import { ConfigProvider, Duration, Effect, Exit, Layer } from "effect"
-import { ZepError } from "../src/cluster/zep"
-import { ClusterProblem, Librarian } from "../src/domain/librarian"
-import { TracingLive } from "../src/tracing"
-
-const getNodeId = () => `node-${Math.floor(Math.random() * 1000)}`
-
-const program = Effect.gen(function*() {
-  const client = yield* Librarian.client
-
-  const nodeId = getNodeId()
-  const document = "test"
-
-  const result = yield* Effect.log(
-    `Analyze document ${nodeId}: '${document}'`
-  ).pipe(
-    Effect.zipRight(
-      client(nodeId).AnalyzeDocument({ document }).pipe(Effect.exit)
-    ),
-    Effect.flatMap((exit) => {
-      // no mathematician will calculate such a large number
-      // avoid retrying
-      if (Exit.isFailure(exit) && exit.cause._tag === "Fail") {
-        if (exit.cause.error instanceof ZepError) {
-          return Exit.succeed({
-            message: "Librarian failed to upload analysis to Zep",
-            analysis: "",
-            result: exit.cause.error.message
-          })
-        }
-        if (exit.cause.error instanceof AiError.AiError) {
-          return Exit.succeed({
-            message: "Librarian failed to analyze document",
-            analysis: "",
-            result: exit.cause.error.message
-          })
-        }
-        // all other error could be recoverable
-        return Effect.fail(exit.cause.error)
-      }
-      return exit
-    }),
-    Effect.withSpan("analyze-document"),
-    Effect.timeout(Duration.seconds(3)),
-    Effect.retry({
-      times: 0
-    }),
-    // Something catastrophic happened
-    Effect.catchAll((e) =>
-      Effect.fail(
-        new ClusterProblem({
-          message: "Something catastrophic happened -> " + e._tag
-        })
-      )
-    ),
-    Effect.exit
-  )
-
-  if (Exit.isSuccess(result)) {
-    yield* Effect.log("Result").pipe(
-      Effect.annotateLogs({
-        analysis: result.value.analysis,
-        document
-      })
-    )
-  } else {
-    yield* Effect.log("Result failed").pipe(
-      Effect.annotateLogs({ cause: result.cause, document })
-    )
-  }
-  return result
-})
+import { Command, Options } from "@effect/cli"
+import { NodeClusterRunnerSocket, NodeContext, NodeRuntime } from "@effect/platform-node"
+import { Config, ConfigProvider, Effect, Exit, Layer, pipe } from "effect"
+import { TracingLive } from "../src/cluster/tracing"
+import { ArchiveError } from "../src/domain/archives"
+import { Archivist, ClusterProblem } from "../src/domain/archivist"
 
 const ClusterLayer = NodeClusterRunnerSocket.layer({
   clientOnly: true
 })
 
-Effect.all(Effect.replicate(program, 30), { concurrency: 15 })
-  .pipe(
-    Effect.tap((results) => {
-      const success = results.filter(Exit.isSuccess).length
-      const failure = results.filter(Exit.isFailure).length
-      console.log(`Success: ${success}, Failure: ${failure}`)
-    }),
-    Effect.provide(ClusterLayer),
-    Effect.provide(Layer.setConfigProvider(ConfigProvider.fromJson({
-      ZEP_GROUP_ID: "local"
-    }))),
-    Effect.provide(TracingLive),
-    Effect.catchAll((error) => {
-      console.error(error)
-      return Effect.void
-    }),
-    Effect.runPromise
+const archiveUrl = Options.text("url").pipe(
+  Options.withDescription("The URL of the archive to process"),
+  Options.withFallbackConfig(Config.string("ARCHIVE_URL"))
+)
+
+const entrypoint = Command.make("entrypoint", { archiveUrl }).pipe(
+  Command.withDescription("Process an archive"),
+  Command.withHandler(({ archiveUrl }) =>
+    Effect.gen(function*() {
+      const client = yield* Archivist.client
+
+      const result = yield* Effect.log(`Processing archive`).pipe(
+        Effect.annotateLogs({ archiveUrl }),
+        Effect.zipRight(
+          client(archiveUrl).PrepareDocuments({ archiveUrl }).pipe(Effect.exit)
+        ),
+        Effect.flatMap((exit) => {
+          // avoid retrying
+          if (Exit.isFailure(exit) && exit.cause._tag === "Fail") {
+            if (exit.cause.error instanceof ArchiveError) {
+              return Exit.succeed({
+                message: "Archivist failed to prepare documents",
+                fileCount: 0,
+                result: exit.cause.error.message
+              })
+            }
+            // all other error could be recoverable
+            return Effect.fail(exit.cause.error)
+          }
+          return exit
+        }),
+        Effect.catchAll((e) =>
+          Effect.fail(
+            new ClusterProblem({
+              message: "Something catastrophic happened -> " + e._tag
+            })
+          )
+        ),
+        Effect.exit
+      )
+
+      if (Exit.isSuccess(result)) {
+        yield* Effect.log("Result").pipe(
+          Effect.annotateLogs({
+            fileCount: result.value.fileCount
+          })
+        )
+      } else {
+        yield* Effect.log("Result failed").pipe(
+          Effect.annotateLogs({
+            cause: result.cause,
+            archiveUrl
+          })
+        )
+      }
+      return result
+    })
   )
-  .catch((error) => {
-    console.error(error)
+)
+
+export const run = Command.run(entrypoint, {
+  name: "process-archive",
+  version: "0.0.1"
+})
+
+run(process.argv).pipe(
+  Effect.provide([ClusterLayer, NodeContext.layer, TracingLive]),
+  Effect.provide(Layer.setConfigProvider(pipe(
+    ConfigProvider.fromJson({
+      ZEP_GROUP_ID: "local"
+    }),
+    ConfigProvider.orElse(() => ConfigProvider.fromEnv())
+  ))),
+  NodeRuntime.runMain({
+    disableErrorReporting: true,
+    disablePrettyLogger: true
   })
+)

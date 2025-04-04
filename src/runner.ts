@@ -4,7 +4,8 @@ import { IpAddress, ipLayer, Port, portLayer } from "app/cluster/container-metad
 import { HealthServerLive } from "app/cluster/health-server"
 import { SqlLayer } from "app/cluster/sql"
 import { Context, Effect, Layer, Logger, Option } from "effect"
-import { LibrarianLive } from "./domain/librarian"
+import { TracingLive } from "./cluster/tracing"
+import { ArchivistLive } from "./domain/archivist"
 
 const RunnerLive = Layer.mergeAll(ipLayer, portLayer).pipe(
   Layer.flatMap((ctx) =>
@@ -22,7 +23,7 @@ const RunnerLive = Layer.mergeAll(ipLayer, portLayer).pipe(
   )
 )
 
-const Entities = Layer.mergeAll(LibrarianLive).pipe(
+const Entities = Layer.mergeAll(ArchivistLive).pipe(
   Layer.provide(ipLayer)
 )
 
@@ -30,6 +31,7 @@ const program = Entities.pipe(
   Layer.provide(RunnerLive),
   Layer.provide(HealthServerLive),
   Layer.provide(SqlLayer),
+  Layer.provide(TracingLive),
   Layer.launch
 )
 

@@ -1,10 +1,17 @@
 import { ZepClient } from "@getzep/zep-cloud"
-import { Config, Effect, Schema } from "effect"
+import { Config, Duration, Effect, Schedule, Schema } from "effect"
 
 export class ZepError extends Schema.TaggedError<ZepError>()("ZepError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown)
 }) {}
+
+export class TooLargeError extends Schema.TaggedError<TooLargeError>()(
+  "TooLargeError",
+  {
+    message: Schema.String
+  }
+) {}
 
 export class Zep extends Effect.Service<Zep>()("Zep", {
   effect: Effect.gen(function*() {
@@ -31,10 +38,33 @@ export class Zep extends Effect.Service<Zep>()("Zep", {
       Effect.orElse(() => with_((client) => client.group.add({ groupId })))
     )
 
+    const addData = Effect.fn("Zep.addData")(function*(data: string) {
+      if (data.length > 10000) {
+        return yield* new TooLargeError({
+          message: "Data is too large"
+        })
+      }
+
+      return yield* with_((client) =>
+        client.graph.add({
+          groupId,
+          type: "json",
+          data
+        })
+      ).pipe(
+        Effect.tapErrorCause(Effect.logError),
+        Effect.retry({
+          times: 3,
+          schedule: Schedule.exponential(Duration.seconds(1))
+        })
+      )
+    })
+
     return {
       client,
       groupId,
-      with: with_
+      with: with_,
+      addData
     } as const
   })
 }) {
